@@ -1,0 +1,97 @@
+{
+  "evaluado_utc": "2026-08-14T12:00:06.670343-04:00",
+  "advertencia_metodologica": "El split test se utiliza solo para evaluacion final; no ajustar hiperparametros con estos resultados.",
+  "split": "test",
+  "modelo": "runs/entrenamiento/yolo11n_vehiculos_definitivo_seed42/weights/best.pt",
+  "modelo_sha256": "092ac2fda52b76562bd9041f0ad39dc985601d8ce059e77596781208f85f6cba",
+  "data_yaml_original": "vehicle dataset limpio final/data.yaml",
+  "data_yaml_efectivo": "resultados/evaluacion/_config/data_test_resuelto.yaml",
+  "imgsz": 640,
+  "batch": 4,
+  "device": "0",
+  "metricas_globales": {
+    "precision": 0.9557219789154378,
+    "recall": 0.9563495248907001,
+    "map50": 0.9787472443704641,
+    "map50_95": 0.8959734715704688
+  },
+  "velocidad_ms_por_imagen": {
+    "preprocess": 0.5031867346718043,
+    "inference": 9.090744557824461,
+    "loss": 0.002007823179131073,
+    "postprocess": 1.0160299320051884
+  },
+  "metricas_por_clase": [
+    {
+      "clase_id": 0,
+      "clase": "car",
+      "precision": 0.9604671732513742,
+      "recall": 0.9571428571428572,
+      "f1": 0.9588021337255407,
+      "map50": 0.9821314811029369,
+      "map50_95": 0.9382527694871786
+    },
+    {
+      "clase_id": 1,
+      "clase": "threewheel",
+      "precision": 0.9701187581687633,
+      "recall": 0.9691429001662022,
+      "f1": 0.9696305836361907,
+      "map50": 0.9930509803921569,
+      "map50_95": 0.8995370543160328
+    },
+    {
+      "clase_id": 2,
+      "clase": "bus",
+      "precision": 0.9683887267243614,
+      "recall": 1.0,
+      "f1": 0.9839405332663922,
+      "map50": 0.9936666666666667,
+      "map50_95": 0.9492273053666047
+    },
+    {
+      "clase_id": 3,
+      "clase": "truck",
+      "precision": 0.9177060119063026,
+      "recall": 0.9491525423728814,
+      "f1": 0.9331644246481918,
+      "map50": 0.9558559530643277,
+      "map50_95": 0.8672608185160346
+    },
+    {
+      "clase_id": 4,
+      "clase": "motorbike",
+      "precision": 0.9685807771572844,
+      "recall": 0.8808406678440782,
+      "f1": 0.9226294427569267,
+      "map50": 0.9572441384213536,
+      "map50_95": 0.7635821183603094
+    },
+    {
+      "clase_id": 5,
+      "clase": "van",
+      "precision": 0.9490704262845409,
+      "recall": 0.9818181818181818,
+      "f1": 0.9651666040618355,
+      "map50": 0.9905342465753425,
+      "map50_95": 0.9579807633766537
+    }
+  ],
+  "entorno": {
+    "python": "3.11.9",
+    "sistema": "Windows-10-10.0.19045-SP0",
+    "torch": "2.13.0+cu126",
+    "ultralytics": "8.4.118",
+    "cuda_disponible": true,
+    "cuda_runtime_torch": "12.6"
+  },
+  "clases_configuradas": {
+    "0": "car",
+    "1": "threewheel",
+    "2": "bus",
+    "3": "truck",
+    "4": "motorbike",
+    "5": "van"
+  },
+  "directorio_resultados": "resultados/evaluacion/test_yolo11n_definitivo"
+}

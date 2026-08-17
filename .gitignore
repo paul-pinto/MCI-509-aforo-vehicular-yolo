@@ -1,0 +1,83 @@
+# Python
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE y sistema operativo
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Secretos y archivos locales
+.env
+.env.*
+!.env.example
+*cookies*.txt
+*credentials*
+*secrets*
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Modelos y exportaciones
+*.pt
+*.pth
+*.onnx
+*.engine
+*.torchscript
+*.tflite
+
+# Datasets y datos de dominio
+datos/
+datasets/
+vehicle dataset/
+vehicle dataset limpio/
+vehicle dataset limpio final/
+correcciones_etiquetas/
+
+# Videos y medios
+videos/
+*.avi
+*.mp4
+*.mkv
+*.mov
+*.m3u8
+
+# Ejecuciones y salidas pesadas
+runs/
+outputs/
+logs/
+wandb/
+
+# Resultados intermedios
+resultados/auditoria_dataset/
+resultados/auditoria_dataset_corregida/
+resultados/auditoria_dataset_definitiva/
+resultados/auditoria_dataset_entrenamiento/
+resultados/diagnostico_conflictos/
+resultados/evidencia_cualitativa/
+resultados/predicciones/
+resultados/revision_preanotacion/
+resultados/exclusiones_dataset.csv
+resultados/evaluacion/_config/
+
+# Archivos locales o temporales
+bus.jpg
+Comando para ejecutar.txt
+config_trafico_anterior.json
+eventos_trafico.csv
+*.bak
+
+# Imágenes de validación derivadas del dataset
+resultados/evaluacion/**/val_batch*.jpg
