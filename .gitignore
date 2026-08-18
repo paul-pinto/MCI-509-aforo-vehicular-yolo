@@ -81,3 +81,14 @@ eventos_trafico.csv
 
 # Imágenes de validación derivadas del dataset
 resultados/evaluacion/**/val_batch*.jpg
+
+# Backups locales
+*_backup_*.py
+*_backup_*.json
+
+# Eventos y sesiones generados
+eventos_trafico*.csv
+sesiones_aforo.csv
+
+# Resultados temporales
+resultados/revision_roi/

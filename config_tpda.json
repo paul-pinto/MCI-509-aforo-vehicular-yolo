@@ -1,0 +1,9 @@
+{
+  "metodo_preliminar": "vhp_k",
+  "k_vhp": 0.08,
+  "tipo_via_referencia": "suburbana",
+  "nota_k": "Valor de referencia metodologica. Requiere calibracion local para uso operacional.",
+  "factor_mensual": null,
+  "factor_diario": null,
+  "fuente_factores": ""
+}

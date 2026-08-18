@@ -79,6 +79,7 @@ def argumentos() -> argparse.Namespace:
     parser.add_argument("--setup", action="store_true", help="Marcar ROI y línea con el mouse.")
     parser.add_argument("--config", type=Path, default=Path("config_trafico.json"))
     parser.add_argument("--events", type=Path, default=Path("eventos_trafico.csv"))
+    parser.add_argument("--sessions", type=Path, default=Path("sesiones_aforo.csv"))
     parser.add_argument("--no-analytics", action="store_true", help="Desactivar ROI y conteo.")
     return parser.parse_args()
 
@@ -151,9 +152,77 @@ def abrir_eventos(ruta: Path):
     archivo = ruta.open("a", newline="", encoding="utf-8")
     writer = csv.writer(archivo)
     if nuevo:
-        writer.writerow(["timestamp", "track_id", "clase_id", "clase", "direccion", "confianza"])
+        writer.writerow([
+            "session_id",
+            "timestamp",
+            "track_id",
+            "clase_id",
+            "clase",
+            "direccion",
+            "confianza",
+            "distancia_inicio_px",
+            "distancia_final_px",
+            "desplazamiento_px",
+            "progreso_normal_px",
+        ])
         archivo.flush()
     return archivo, writer
+
+
+def registrar_sesion(
+    ruta: Path,
+    session_id: str,
+    estacion_id: str,
+    via: str,
+    referencia: str,
+    ciudad: str,
+    inicio: datetime,
+    fin: datetime,
+    total_vehiculos: int,
+    estado: str,
+):
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+
+    nuevo = not ruta.exists() or ruta.stat().st_size == 0
+
+    duracion_segundos = int(
+        (fin - inicio).total_seconds()
+    )
+
+    with ruta.open(
+        "a",
+        newline="",
+        encoding="utf-8",
+    ) as archivo:
+
+        writer = csv.writer(archivo)
+
+        if nuevo:
+            writer.writerow([
+                "session_id",
+                "estacion_id",
+                "via",
+                "referencia",
+                "ciudad",
+                "inicio",
+                "fin",
+                "duracion_segundos",
+                "total_vehiculos",
+                "estado",
+            ])
+
+        writer.writerow([
+            session_id,
+            estacion_id,
+            via,
+            referencia,
+            ciudad,
+            inicio.isoformat(timespec="milliseconds"),
+            fin.isoformat(timespec="milliseconds"),
+            duracion_segundos,
+            total_vehiculos,
+            estado,
+        ])
 
 
 def normalizar_fuente(valor: str) -> int | str:
@@ -178,18 +247,83 @@ def fuente_segura(source: int | str) -> str:
     return urlunsplit((partes.scheme, netloc, partes.path, partes.query, ""))
 
 
+
+
+def distancia_firmada_linea(
+    punto: tuple[int, int],
+    a: tuple[int, int],
+    b: tuple[int, int],
+) -> float:
+    """
+    Distancia perpendicular firmada de un punto a una línea.
+
+    > 0 : un lado
+    < 0 : lado contrario
+    = 0 : sobre la línea
+
+    Resultado en píxeles.
+    """
+    px, py = punto
+    ax, ay = a
+    bx, by = b
+
+    dx = bx - ax
+    dy = by - ay
+
+    longitud = float(np.hypot(dx, dy))
+
+    if longitud == 0:
+        return 0.0
+
+    cruz = dx * (py - ay) - dy * (px - ax)
+
+    return cruz / longitud
+
 def abrir_captura(source: int | str, width: int, height: int) -> cv2.VideoCapture:
     if isinstance(source, int) and os.name == "nt":
-        captura = cv2.VideoCapture(source, cv2.CAP_DSHOW)
+        print("[CAPTURA] Abriendo webcam con DirectShow...", flush=True)
+
+        captura = cv2.VideoCapture(
+            source,
+            cv2.CAP_DSHOW,
+        )
+
+        captura.set(
+            cv2.CAP_PROP_BUFFERSIZE,
+            1,
+        )
+
+        captura.set(
+            cv2.CAP_PROP_FRAME_WIDTH,
+            width,
+        )
+
+        captura.set(
+            cv2.CAP_PROP_FRAME_HEIGHT,
+            height,
+        )
+
     elif es_stream_remoto(source):
-        captura = cv2.VideoCapture(source, cv2.CAP_FFMPEG)
+        print(
+            "[CAPTURA] Abriendo stream remoto con FFmpeg...",
+            flush=True,
+        )
+
+        captura = cv2.VideoCapture(
+            source,
+            cv2.CAP_FFMPEG,
+        )
+
     else:
+        print("[CAPTURA] Abriendo archivo local...", flush=True)
+
         captura = cv2.VideoCapture(source)
 
-    captura.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    if isinstance(source, int):
-        captura.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-        captura.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    print(
+        f"[CAPTURA] isOpened = {captura.isOpened()}",
+        flush=True,
+    )
+
     return captura
 
 
@@ -247,6 +381,8 @@ def main() -> int:
         print(f"GPU: {torch.cuda.get_device_name(0)}")
 
     captura = abrir_captura(source, args.width, args.height)
+    print("[CAPTURA] abrir_captura() terminó", flush=True)
+
     if not captura.isOpened():
         raise RuntimeError(f"No se pudo abrir la fuente: {fuente_segura(source)}")
 
@@ -257,12 +393,47 @@ def main() -> int:
     roi: list[tuple[int, int]] | None = None
     linea: list[tuple[int, int]] | None = None
     etiquetas_direccion = ["A", "B"]
-    lados_previos: dict[int, float] = {}
+    lados_previos: dict[int, int] = {}
     contados: set[int] = set()
+
+    # Historial espacial de cada track
+    trayectorias: dict[int, deque] = {}
+
+    # Cantidad de frames observados por ID
+    edad_tracks: Counter[int] = Counter()
+
+    # Parámetros anti-falsos-cruces
+    HISTERESIS_LINEA_PX = 18.0
+    MIN_FRAMES_TRACK = 5
+    MIN_DESPLAZAMIENTO_PX = 25.0
+    MIN_PROGRESO_NORMAL_PX = 25.0
+    HISTORIAL_TRACK = 12
     totales_direccion: Counter[str] = Counter()
     totales_clase: Counter[str] = Counter()
     eventos_archivo = None
     eventos_writer = None
+
+    # Historial temporal de cruces para métricas en tiempo real.
+    # Guardaremos datetime de cada evento validado.
+    tiempos_cruces = deque()
+
+    # --------------------------------------------------------
+    # Metadatos de la sesión de aforo
+    # --------------------------------------------------------
+
+    inicio_aforo = None
+    session_id = None
+    estado_sesion = "ERROR"
+
+    estacion_id = "SIN-ID"
+    via_aforo = "Sin definir"
+    referencia_aforo = ""
+    ciudad_aforo = ""
+
+    sentidos_descriptivos = {
+        "A": "Sentido A",
+        "B": "Sentido B",
+    }
 
     try:
         while True:
@@ -289,20 +460,86 @@ def main() -> int:
                         raise RuntimeError("--setup necesita una ventana; quite --no-display.")
                     configurar_analitica(frame, args.config)
                 roi, linea, etiquetas_direccion = cargar_analitica(args.config, frame)
+
+                # Cargar también los metadatos descriptivos de la estación.
+                datos_config = json.loads(
+                    args.config.read_text(encoding="utf-8")
+                )
+
+                ubicacion = datos_config.get("ubicacion", {})
+
+                estacion_id = ubicacion.get(
+                    "estacion_id",
+                    "SIN-ID"
+                )
+
+                via_aforo = ubicacion.get(
+                    "via",
+                    "Sin definir"
+                )
+
+                referencia_aforo = ubicacion.get(
+                    "referencia",
+                    ""
+                )
+
+                ciudad_aforo = ubicacion.get(
+                    "ciudad",
+                    ""
+                )
+
+                sentidos_config = datos_config.get(
+                    "sentidos",
+                    {}
+                )
+
+                sentidos_descriptivos = {
+                    "A": sentidos_config.get(
+                        "A",
+                        "Sentido A"
+                    ),
+                    "B": sentidos_config.get(
+                        "B",
+                        "Sentido B"
+                    ),
+                }
+
+                # El cronómetro comienza cuando la analítica queda activa.
+                if inicio_aforo is None:
+                    inicio_aforo = datetime.now().astimezone()
+
+                    session_id = inicio_aforo.strftime(
+                        "%Y%m%d_%H%M%S"
+                    )
+
+                    print(
+                        f"Sesión de aforo: {session_id}"
+                    )
+
                 eventos_archivo, eventos_writer = abrir_eventos(args.events)
-                print(f"Analítica activa | ROI: {len(roi)} puntos | Línea: {linea}")
+
+                print(
+                    f"Analítica activa | Estación: {estacion_id} | "
+                    f"Vía: {via_aforo} | ROI: {len(roi)} puntos | "
+                    f"Línea: {linea}"
+                )
+
+                print(
+                    f"Inicio del aforo: "
+                    f"{inicio_aforo.strftime('%Y-%m-%d %H:%M:%S')}"
+                )
 
             frame_num += 1
             if args.skip and frame_num % (args.skip + 1) != 1:
                 continue
 
+            # YOLO siempre procesa el frame completo.
+            # La ROI se utiliza únicamente para filtrar detecciones
+            # y para la lógica de conteo, no para enmascarar la entrada.
             frame_ia = frame
+
             if roi is not None:
-                mascara = frame.copy()
-                mascara[:] = 0
                 poligono = np.array(roi, dtype="int32")
-                cv2.fillPoly(mascara, [poligono], (255, 255, 255))
-                frame_ia = cv2.bitwise_and(frame, mascara)
 
             inicio = time.perf_counter()
             resultado = modelo.track(
@@ -348,23 +585,139 @@ def main() -> int:
 
                     if track_id is None or linea is None:
                         continue
-                    lado = lado_linea(centro, linea[0], linea[1])
-                    anterior = lados_previos.get(track_id)
-                    # La zona muerta evita contar oscilaciones exactamente sobre la línea.
-                    umbral = max(frame.shape[:2]) * 0.004
-                    if abs(lado) > umbral:
-                        if anterior is not None and anterior * lado < 0 and track_id not in contados:
-                            direccion = etiquetas_direccion[0] if anterior < 0 < lado else etiquetas_direccion[1]
-                            contados.add(track_id)
-                            totales_direccion[direccion] += 1
-                            totales_clase[nombre] += 1
-                            eventos_writer.writerow([
-                                datetime.now().astimezone().isoformat(timespec="seconds"),
-                                track_id, clase_id, nombre, direccion, f"{confianza:.4f}",
-                            ])
-                            eventos_archivo.flush()
-                            print(f"CRUCE | ID {track_id} | {nombre} | dirección {direccion}")
-                        lados_previos[track_id] = lado
+
+                    # --------------------------------------------------------
+                    # Historial temporal del track
+                    # --------------------------------------------------------
+
+                    edad_tracks[track_id] += 1
+
+                    if track_id not in trayectorias:
+                        trayectorias[track_id] = deque(maxlen=HISTORIAL_TRACK)
+
+                    trayectorias[track_id].append(centro)
+
+                    # --------------------------------------------------------
+                    # Distancia firmada respecto de la línea
+                    # --------------------------------------------------------
+
+                    distancia = distancia_firmada_linea(
+                        centro,
+                        linea[0],
+                        linea[1],
+                    )
+
+                    # Histéresis: mientras el vehículo esté demasiado cerca
+                    # de la línea, no actualizamos el lado estable.
+                    if distancia >= HISTERESIS_LINEA_PX:
+                        lado_actual = 1
+                    elif distancia <= -HISTERESIS_LINEA_PX:
+                        lado_actual = -1
+                    else:
+                        continue
+
+                    lado_anterior = lados_previos.get(track_id)
+
+                    # Primera posición estable conocida.
+                    if lado_anterior is None:
+                        lados_previos[track_id] = lado_actual
+                        continue
+
+                    # Sigue en el mismo lado.
+                    if lado_actual == lado_anterior:
+                        lados_previos[track_id] = lado_actual
+                        continue
+
+                    # --------------------------------------------------------
+                    # Posible cruce: validar trayectoria
+                    # --------------------------------------------------------
+
+                    historial = trayectorias[track_id]
+
+                    if len(historial) < 2:
+                        lados_previos[track_id] = lado_actual
+                        continue
+
+                    inicio_track = historial[0]
+                    actual_track = historial[-1]
+
+                    dx_track = actual_track[0] - inicio_track[0]
+                    dy_track = actual_track[1] - inicio_track[1]
+
+                    desplazamiento = float(
+                        np.hypot(dx_track, dy_track)
+                    )
+
+                    distancia_inicio = distancia_firmada_linea(
+                        inicio_track,
+                        linea[0],
+                        linea[1],
+                    )
+
+                    progreso_normal = abs(
+                        distancia - distancia_inicio
+                    )
+
+                    track_estable = (
+                        edad_tracks[track_id] >= MIN_FRAMES_TRACK
+                    )
+
+                    movimiento_suficiente = (
+                        desplazamiento >= MIN_DESPLAZAMIENTO_PX
+                    )
+
+                    cruce_profundo = (
+                        progreso_normal >= MIN_PROGRESO_NORMAL_PX
+                    )
+
+                    if (
+                        track_estable
+                        and movimiento_suficiente
+                        and cruce_profundo
+                        and track_id not in contados
+                    ):
+
+                        if lado_anterior < 0 and lado_actual > 0:
+                            direccion = etiquetas_direccion[0]
+                        else:
+                            direccion = etiquetas_direccion[1]
+
+                        contados.add(track_id)
+
+                        totales_direccion[direccion] += 1
+                        totales_clase[nombre] += 1
+
+                        instante_cruce = datetime.now().astimezone()
+                        tiempos_cruces.append(instante_cruce)
+
+                        eventos_writer.writerow([
+                            session_id,
+                            instante_cruce.isoformat(
+                                timespec="milliseconds"
+                            ),
+                            track_id,
+                            clase_id,
+                            nombre,
+                            direccion,
+                            f"{confianza:.4f}",
+                            f"{distancia_inicio:.2f}",
+                            f"{distancia:.2f}",
+                            f"{desplazamiento:.2f}",
+                            f"{progreso_normal:.2f}",
+                        ])
+
+                        eventos_archivo.flush()
+
+                        hora_cruce = datetime.now().astimezone().strftime("%H:%M:%S.%f")[:-3]
+
+                        print(
+                            f"CRUCE | {hora_cruce} | ID {track_id} | {nombre} | "
+                            f"sentido {direccion} | "
+                            f"desp={desplazamiento:.1f}px | "
+                            f"normal={progreso_normal:.1f}px"
+                        )
+
+                    lados_previos[track_id] = lado_actual
 
             if roi is not None:
                 cv2.polylines(anotado, [poligono], True, (0, 255, 255), 2, cv2.LINE_AA)
@@ -373,20 +726,262 @@ def main() -> int:
                 cv2.putText(anotado, etiquetas_direccion[0], linea[0], cv2.FONT_HERSHEY_SIMPLEX, .8, (255, 0, 255), 2)
                 cv2.putText(anotado, etiquetas_direccion[1], linea[1], cv2.FONT_HERSHEY_SIMPLEX, .8, (255, 0, 255), 2)
 
-            texto = f"FPS IA: {fps_inferencia:.1f} | Objetos: {cantidad} | IDs visibles: {len(ids)}"
-            cv2.rectangle(anotado, (8, 8), (690, 45), (0, 0, 0), -1)
-            cv2.putText(
-                anotado, texto, (18, 34), cv2.FONT_HERSHEY_SIMPLEX,
-                0.72, (0, 255, 0), 2, cv2.LINE_AA,
+            # ============================================================
+            # ============================================================
+            # DASHBOARD COMPACTO DEL AFORO
+            # ============================================================
+
+            ahora = datetime.now().astimezone()
+
+            if inicio_aforo is not None:
+                duracion_segundos = int(
+                    (ahora - inicio_aforo).total_seconds()
+                )
+
+                horas = duracion_segundos // 3600
+                minutos = (duracion_segundos % 3600) // 60
+                segundos = duracion_segundos % 60
+
+                duracion_texto = (
+                    f"{horas:02d}:{minutos:02d}:{segundos:02d}"
+                )
+
+                inicio_texto = inicio_aforo.strftime(
+                    "%d/%m/%Y %H:%M:%S"
+                )
+            else:
+                duracion_segundos = 0
+                duracion_texto = "00:00:00"
+                inicio_texto = "--/--/---- --:--:--"
+
+
+            # --------------------------------------------------------
+            # Limpiar timestamps antiguos
+            # --------------------------------------------------------
+
+            # Conservamos al menos 60 minutos de eventos en memoria.
+            limite_60m = ahora.timestamp() - (60 * 60)
+
+            while (
+                tiempos_cruces
+                and tiempos_cruces[0].timestamp() < limite_60m
+            ):
+                tiempos_cruces.popleft()
+
+
+            # --------------------------------------------------------
+            # Métricas temporales
+            # --------------------------------------------------------
+
+            ahora_ts = ahora.timestamp()
+
+            cruces_1m = sum(
+                1
+                for t in tiempos_cruces
+                if t.timestamp() >= ahora_ts - 60
             )
 
-            if roi is not None:
-                resumen_dir = " | ".join(f"{k}: {totales_direccion[k]}" for k in etiquetas_direccion)
-                resumen_cls = " | ".join(f"{k}: {v}" for k, v in totales_clase.most_common()) or "Sin cruces"
-                cv2.rectangle(anotado, (8, 52), (min(anotado.shape[1] - 8, 900), 112), (0, 0, 0), -1)
-                cv2.putText(anotado, f"Cruces {resumen_dir}", (18, 77), cv2.FONT_HERSHEY_SIMPLEX, .62, (0, 255, 255), 2)
-                cv2.putText(anotado, resumen_cls, (18, 103), cv2.FONT_HERSHEY_SIMPLEX, .55, (255, 255, 255), 1)
+            cruces_5m = sum(
+                1
+                for t in tiempos_cruces
+                if t.timestamp() >= ahora_ts - (5 * 60)
+            )
 
+            cruces_15m = sum(
+                1
+                for t in tiempos_cruces
+                if t.timestamp() >= ahora_ts - (15 * 60)
+            )
+
+            # --------------------------------------------------------
+            # Tasa de flujo q15
+            # --------------------------------------------------------
+
+            # Según metodología de Ingeniería de Tráfico:
+            # q = N / T
+            #
+            # Para una ventana completa de 15 minutos:
+            #
+            # q15 = N15 / 0.25 h
+            #
+            # Antes de completar los primeros 15 minutos,
+            # se usa el tiempo real transcurrido como estimación
+            # temporal de flujo, sin llamarlo todavía q15 definitivo.
+
+            if duracion_segundos >= 900:
+                q15 = cruces_15m / 0.25
+                q15_estado = "q15"
+            elif duracion_segundos > 0:
+                horas_observadas = duracion_segundos / 3600.0
+                q15 = sum(totales_direccion.values()) / horas_observadas
+                q15_estado = "q parcial"
+            else:
+                q15 = 0.0
+                q15_estado = "q parcial"
+
+
+            # --------------------------------------------------------
+            # Tránsito Horario observado
+            # --------------------------------------------------------
+
+            # Solo lo consideramos TH observado cuando existe
+            # al menos una hora completa de sesión.
+
+            if duracion_segundos >= 3600:
+                limite_1h = ahora.timestamp() - 3600
+
+                th_observado = sum(
+                    1
+                    for t in tiempos_cruces
+                    if t.timestamp() >= limite_1h
+                )
+
+                th_texto = f"{th_observado} veh/h"
+            else:
+                th_observado = None
+                faltan_seg = 3600 - duracion_segundos
+
+                faltan_min = max(
+                    0,
+                    faltan_seg // 60
+                )
+
+                th_texto = f"-- (faltan {faltan_min} min)"
+
+
+            # --------------------------------------------------------
+            # Conteos acumulados
+            # --------------------------------------------------------
+
+            total_cruces = sum(
+                totales_direccion.values()
+            )
+
+            total_a = totales_direccion[
+                etiquetas_direccion[0]
+            ]
+
+            total_b = totales_direccion[
+                etiquetas_direccion[1]
+            ]
+
+            resumen_cls = " | ".join(
+                f"{k}: {v}"
+                for k, v in totales_clase.most_common()
+            ) or "Sin cruces"
+
+
+            # --------------------------------------------------------
+            # Texto de estación
+            # --------------------------------------------------------
+
+            referencia_texto = (
+                f" - {referencia_aforo}"
+                if referencia_aforo
+                else ""
+            )
+
+            texto_estacion = (
+                f"{estacion_id} | "
+                f"{via_aforo}{referencia_texto}"
+            )
+
+
+            # --------------------------------------------------------
+            # PANEL COMPACTO
+            # --------------------------------------------------------
+
+            panel_x1 = 8
+            panel_y1 = 8
+            panel_x2 = min(anotado.shape[1] - 8, 980)
+            panel_y2 = 164
+
+            cv2.rectangle(
+                anotado,
+                (panel_x1, panel_y1),
+                (panel_x2, panel_y2),
+                (0, 0, 0),
+                -1,
+            )
+
+
+            # Línea 1: estación + estado
+            cv2.putText(
+                anotado,
+                f"{texto_estacion} | AFORO EN CURSO",
+                (18, 32),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.62,
+                (255, 255, 255),
+                2,
+                cv2.LINE_AA,
+            )
+
+
+            # Línea 2: tiempo + IA
+            cv2.putText(
+                anotado,
+                (
+                    f"Inicio {inicio_texto} | "
+                    f"Duracion {duracion_texto} | "
+                    f"FPS {fps_inferencia:.1f}"
+                ),
+                (18, 58),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.49,
+                (0, 255, 0),
+                1,
+                cv2.LINE_AA,
+            )
+
+
+            # Línea 3: conteos
+            cv2.putText(
+                anotado,
+                (
+                    f"TOTAL {total_cruces} | "
+                    f"Principal {total_a} | "
+                    f"Contrario {total_b}"
+                ),
+                (18, 88),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.60,
+                (0, 255, 255),
+                2,
+                cv2.LINE_AA,
+            )
+
+
+            # Línea 4: clases
+            cv2.putText(
+                anotado,
+                resumen_cls,
+                (18, 114),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.46,
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
+
+
+            # Línea 5: métricas temporales
+            cv2.putText(
+                anotado,
+                (
+                    f"1m {cruces_1m} | "
+                    f"5m {cruces_5m} | "
+                    f"15m {cruces_15m} | "
+                    f"{q15_estado}: {q15:.0f} veh/h | "
+                    f"TH: {th_texto}"
+                ),
+                (18, 143),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.48,
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
             if args.record:
                 if writer is None:
                     alto, ancho = anotado.shape[:2]
@@ -401,15 +996,62 @@ def main() -> int:
                 if tecla in (ord("q"), 27):
                     break
 
+        # Si el bucle termina normalmente (Q, Esc o fin de fuente),
+        # la sesión queda cerrada correctamente.
+        if estado_sesion == "ERROR":
+            estado_sesion = "COMPLETADA"
+
     except KeyboardInterrupt:
+        estado_sesion = "INTERRUMPIDA_USUARIO"
         print("\nInterrumpido por el usuario.")
+
     finally:
         captura.release()
+
         if writer is not None:
             writer.release()
+
         if eventos_archivo is not None:
             eventos_archivo.close()
+
+        # --------------------------------------------------------
+        # Cierre formal de la sesión de aforo
+        # --------------------------------------------------------
+
+        if inicio_aforo is not None and session_id is not None:
+
+            fin_aforo = datetime.now().astimezone()
+
+            total_vehiculos_sesion = sum(
+                totales_direccion.values()
+            )
+
+            registrar_sesion(
+                ruta=args.sessions,
+                session_id=session_id,
+                estacion_id=estacion_id,
+                via=via_aforo,
+                referencia=referencia_aforo,
+                ciudad=ciudad_aforo,
+                inicio=inicio_aforo,
+                fin=fin_aforo,
+                total_vehiculos=total_vehiculos_sesion,
+                estado=estado_sesion,
+            )
+
+            duracion_final = int(
+                (fin_aforo - inicio_aforo).total_seconds()
+            )
+
+            print(
+                f"Sesión {session_id} cerrada | "
+                f"duración={duracion_final}s | "
+                f"vehículos={total_vehiculos_sesion} | "
+                f"estado={estado_sesion}"
+            )
+
         cv2.destroyAllWindows()
+
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
@@ -425,3 +1067,26 @@ if __name__ == "__main__":
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         raise SystemExit(1)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
