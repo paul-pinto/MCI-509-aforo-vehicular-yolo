@@ -15,17 +15,17 @@ from pathlib import Path
 
 def argumentos() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data", type=Path, required=True, help="Ruta a data.yaml.")
-    parser.add_argument("--model", default="yolo11n.pt", help="Pesos iniciales o YAML del modelo.")
-    parser.add_argument("--epochs", type=int, default=50)
+    parser.add_argument("--data", type=Path, default=Path("datos/dataset_v2/data.yaml"), help="Ruta a data.yaml.")
+    parser.add_argument("--model", default="pesos/yolo11n_vehiculos_v1_best.pt", help="Pesos iniciales; por defecto, mejor modelo V1.")
+    parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--batch", type=int, default=4)
     parser.add_argument("--device", default="auto", help="auto, cpu, 0, 0,1, etc.")
     parser.add_argument("--workers", type=int, default=0)
-    parser.add_argument("--patience", type=int, default=15)
+    parser.add_argument("--patience", type=int, default=10)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--project", type=Path, default=Path("runs/entrenamiento"))
-    parser.add_argument("--name", default="yolo11n_vehiculos_seed42")
+    parser.add_argument("--name", default="yolo11n_vehiculos_v2_dominio_objetivo_seed42")
     parser.add_argument("--freeze", type=int, default=0, help="Capas iniciales que se congelaran.")
     parser.add_argument("--prueba", action="store_true", help="Ejecuta 1 epoca con 5%% del train.")
     return parser.parse_args()
@@ -186,7 +186,19 @@ def main() -> int:
             name=nombre,
             exist_ok=False,
             pretrained=True,
-            optimizer="auto",
+            optimizer="AdamW",
+            lr0=0.001,
+            lrf=0.01,
+            weight_decay=0.0005,
+            momentum=0.937,
+            warmup_epochs=3.0,
+            hsv_h=0.015,
+            hsv_s=0.7,
+            hsv_v=0.4,
+            translate=0.1,
+            scale=0.5,
+            fliplr=0.5,
+            mosaic=1.0,
             patience=args.patience,
             seed=args.seed,
             deterministic=True,
@@ -219,3 +231,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
