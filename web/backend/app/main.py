@@ -6,7 +6,6 @@ from contextlib import (
 )
 
 from datetime import datetime
-
 from pathlib import Path
 
 import cv2
@@ -65,6 +64,10 @@ from .video_service import (
     VideoService,
 )
 
+from .webrtc_service import (
+    WebRTCService,
+)
+
 
 # ============================================================
 # RUTAS
@@ -77,13 +80,9 @@ BACKEND_DIR = (
     .parent
 )
 
-WEB_DIR = (
-    BACKEND_DIR.parent
-)
+WEB_DIR = BACKEND_DIR.parent
 
-PROJECT_ROOT = (
-    WEB_DIR.parent
-)
+PROJECT_ROOT = WEB_DIR.parent
 
 DATA_DIR = (
     BACKEND_DIR
@@ -139,7 +138,6 @@ session_service = (
         database_service=(
             database_service
         ),
-
         traffic_config_service=(
             traffic_config_service
         ),
@@ -151,11 +149,9 @@ traffic_counter = (
         traffic_config_service=(
             traffic_config_service
         ),
-
         session_service=(
             session_service
         ),
-
         traffic_metrics_service=(
             traffic_metrics_service
         ),
@@ -167,18 +163,23 @@ video_service = (
         model_service=(
             model_service
         ),
-
         stream_service=(
             stream_service
         ),
-
         traffic_config_service=(
             traffic_config_service
         ),
-
         traffic_counter=(
             traffic_counter
         ),
+    )
+)
+
+webrtc_service = (
+    WebRTCService(
+        video_service=(
+            video_service
+        )
     )
 )
 
@@ -193,6 +194,13 @@ class SourceRequest(
     source: str
 
 
+class WebRTCOfferRequest(
+    BaseModel
+):
+    sdp: str
+    type: str
+
+
 # ============================================================
 # LIFESPAN
 # ============================================================
@@ -202,9 +210,7 @@ async def lifespan(
     app: FastAPI,
 ):
     print("=" * 65)
-    print(
-        "CARGANDO MODELO YOLO11"
-    )
+    print("CARGANDO MODELO YOLO11")
     print("=" * 65)
 
     model_service.load()
@@ -237,9 +243,7 @@ async def lifespan(
     )
 
     print("=" * 65)
-    print(
-        "BASE DE DATOS"
-    )
+    print("BASE DE DATOS")
     print("=" * 65)
 
     print(
@@ -255,20 +259,17 @@ async def lifespan(
 
     print(
         "k VHP:",
-        traffic_metrics_service
-        .k_vhp,
+        traffic_metrics_service.k_vhp,
     )
 
     yield
 
-    video_service.stop()
+    await webrtc_service.close_all()
 
+    video_service.stop()
     stream_service.close()
 
-    if (
-        session_service
-        .is_active()
-    ):
+    if session_service.is_active():
         try:
             session_service.stop(
                 total_vehicles=(
@@ -277,7 +278,6 @@ async def lifespan(
                         "total"
                     ]
                 ),
-
                 status=(
                     "INTERRUMPIDA_SERVIDOR"
                 ),
@@ -286,9 +286,7 @@ async def lifespan(
         except Exception:
             pass
 
-    print(
-        "Cerrando backend..."
-    )
+    print("Cerrando backend...")
 
 
 # ============================================================
@@ -307,7 +305,7 @@ app = FastAPI(
         "YOLO11 + ByteTrack."
     ),
 
-    version="1.0.0",
+    version="1.1.0",
 
     lifespan=lifespan,
 )
@@ -323,6 +321,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "https://aforo.paulpinto.ia.bo",
     ],
 
     allow_credentials=True,
@@ -343,16 +342,12 @@ def root():
         "name": (
             "Sistema de Aforo Vehicular"
         ),
-
         "status": "online",
-
-        "version": "1.0.0",
+        "version": "1.1.0",
     }
 
 
-@app.get(
-    "/api/health"
-)
+@app.get("/api/health")
 def health():
     return {
         "status": "ok",
@@ -373,61 +368,28 @@ def health():
     }
 
 
-@app.get(
-    "/api/info"
-)
+@app.get("/api/info")
 def info():
     return {
         "project_root": str(
             PROJECT_ROOT
         ),
 
-        "version": "1.0.0",
+        "version": "1.1.0",
 
         "components": {
-            "detector": (
-                "YOLO11 V2"
-            ),
-
-            "tracker": (
-                "ByteTrack"
-            ),
-
-            "source_resolver": (
-                "yt-dlp"
-            ),
-
-            "traffic_config": (
-                "ready"
-            ),
-
-            "traffic_counter": (
-                "ready"
-            ),
-
-            "traffic_metrics": (
-                "ready"
-            ),
-
-            "sessions": (
-                "ready"
-            ),
-
-            "database": (
-                "SQLite"
-            ),
-
-            "stream": (
-                "ready"
-            ),
-
-            "video": (
-                "ready"
-            ),
-
-            "tpda": (
-                "ready"
-            ),
+            "detector": "YOLO11 V2",
+            "tracker": "ByteTrack",
+            "source_resolver": "yt-dlp",
+            "traffic_config": "ready",
+            "traffic_counter": "ready",
+            "traffic_metrics": "ready",
+            "sessions": "ready",
+            "database": "SQLite",
+            "stream": "ready",
+            "video": "ready",
+            "webrtc": "ready",
+            "tpda": "ready",
         },
     }
 
@@ -436,9 +398,7 @@ def info():
 # DASHBOARD
 # ============================================================
 
-@app.get(
-    "/api/dashboard"
-)
+@app.get("/api/dashboard")
 def dashboard():
     traffic = (
         traffic_counter
@@ -490,29 +450,12 @@ def dashboard():
             )
         ),
 
-        "station": (
-            station
-        ),
-
-        "session": (
-            current_session
-        ),
-
-        "traffic": (
-            traffic
-        ),
-
-        "source": (
-            source
-        ),
-
-        "video": (
-            video
-        ),
-
-        "model": (
-            model
-        ),
+        "station": station,
+        "session": current_session,
+        "traffic": traffic,
+        "source": source,
+        "video": video,
+        "model": model,
 
         "engineering": {
             "k_vhp": (
@@ -520,9 +463,7 @@ def dashboard():
                 .k_vhp
             ),
 
-            "preliminary_tpda": (
-                True
-            ),
+            "preliminary_tpda": True,
 
             "method": (
                 "TPDA = VHP / k; "
@@ -531,19 +472,51 @@ def dashboard():
             ),
         },
 
-        "last_event": (
-            last_event
-        ),
+        "last_event": last_event,
     }
+
+
+# ============================================================
+# WEBRTC
+# ============================================================
+
+@app.post(
+    "/api/webrtc/offer"
+)
+async def webrtc_offer(
+    request: WebRTCOfferRequest,
+):
+    try:
+        return (
+            await webrtc_service
+            .create_answer(
+                sdp=request.sdp,
+                type_=request.type,
+            )
+        )
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        )
+
+
+@app.get(
+    "/api/webrtc/status"
+)
+async def webrtc_status():
+    return (
+        await webrtc_service
+        .get_status()
+    )
 
 
 # ============================================================
 # MODELO
 # ============================================================
 
-@app.get(
-    "/api/model"
-)
+@app.get("/api/model")
 def model_info():
     return (
         model_service
@@ -583,7 +556,6 @@ def traffic_metrics_config():
     "/api/sessions/start"
 )
 def start_session():
-
     if not (
         stream_service
         .get_info()[
@@ -615,10 +587,7 @@ def start_session():
 
     return {
         "ok": True,
-
-        "session": (
-            session
-        ),
+        "session": session,
 
         "traffic": (
             traffic_counter
@@ -631,7 +600,6 @@ def start_session():
     "/api/sessions/stop"
 )
 def stop_session():
-
     try:
         total = (
             traffic_counter
@@ -643,13 +611,8 @@ def stop_session():
         session = (
             session_service
             .stop(
-                total_vehicles=(
-                    total
-                ),
-
-                status=(
-                    "FINALIZADA"
-                ),
+                total_vehicles=total,
+                status="FINALIZADA",
             )
         )
 
@@ -678,14 +641,8 @@ def stop_session():
 
     return {
         "ok": True,
-
-        "session": (
-            session
-        ),
-
-        "analysis": (
-            analysis
-        ),
+        "session": session,
+        "analysis": analysis,
     }
 
 
@@ -699,9 +656,7 @@ def current_session():
     )
 
 
-@app.get(
-    "/api/sessions"
-)
+@app.get("/api/sessions")
 def sessions(
     limit: int = Query(
         default=100,
@@ -735,7 +690,6 @@ def get_session(
     if session is None:
         raise HTTPException(
             status_code=404,
-
             detail=(
                 "Sesión no encontrada."
             ),
@@ -760,16 +714,13 @@ def session_events(
     if session is None:
         raise HTTPException(
             status_code=404,
-
             detail=(
                 "Sesión no encontrada."
             ),
         )
 
     return {
-        "session_id": (
-            session_id
-        ),
+        "session_id": session_id,
 
         "events": (
             session_service
@@ -796,7 +747,6 @@ def session_analysis(
     if session is None:
         raise HTTPException(
             status_code=404,
-
             detail=(
                 "Sesión no encontrada."
             ),
@@ -823,7 +773,8 @@ def session_analysis(
 # ============================================================
 
 @app.get(
-    "/api/sessions/{session_id}/export.csv"
+    "/api/sessions/"
+    "{session_id}/export.csv"
 )
 def export_session_csv(
     session_id: str,
@@ -875,9 +826,7 @@ def export_session_csv(
     writer.writeheader()
 
     for event in events:
-        row = dict(
-            event
-        )
+        row = dict(event)
 
         row[
             "session_id"
@@ -914,7 +863,7 @@ def export_session_csv(
 
 
 # ============================================================
-# TRÁFICO EN VIVO
+# TRÁFICO
 # ============================================================
 
 @app.get(
@@ -931,7 +880,6 @@ def traffic_status():
     "/api/traffic/metrics"
 )
 def traffic_metrics():
-
     if not (
         session_service
         .is_active()
@@ -967,16 +915,11 @@ def traffic_events():
 # FUENTE
 # ============================================================
 
-@app.post(
-    "/api/source"
-)
+@app.post("/api/source")
 def set_source(
     request: SourceRequest,
 ):
-    if (
-        session_service
-        .is_active()
-    ):
+    if session_service.is_active():
         raise HTTPException(
             status_code=400,
 
@@ -987,7 +930,6 @@ def set_source(
         )
 
     video_service.stop()
-
     stream_service.close()
 
     try:
@@ -999,9 +941,7 @@ def set_source(
         )
 
         print("=" * 65)
-        print(
-            "FUENTE DE VIDEO"
-        )
+        print("FUENTE DE VIDEO")
         print("=" * 65)
 
         print(
@@ -1018,9 +958,7 @@ def set_source(
             ],
         )
 
-        print(
-            "Abriendo stream..."
-        )
+        print("Abriendo stream...")
 
         metadata = {
             key: value
@@ -1050,9 +988,7 @@ def set_source(
                 ]
             ),
 
-            metadata=(
-                metadata
-            ),
+            metadata=metadata,
         )
 
     except Exception as exc:
@@ -1071,9 +1007,7 @@ def set_source(
     }
 
 
-@app.get(
-    "/api/source"
-)
+@app.get("/api/source")
 def get_source():
     return (
         stream_service
@@ -1081,15 +1015,9 @@ def get_source():
     )
 
 
-@app.delete(
-    "/api/source"
-)
+@app.delete("/api/source")
 def close_source():
-
-    if (
-        session_service
-        .is_active()
-    ):
+    if session_service.is_active():
         raise HTTPException(
             status_code=400,
 
@@ -1100,14 +1028,11 @@ def close_source():
         )
 
     video_service.stop()
-
     stream_service.close()
 
     return {
         "ok": True,
-
         "opened": False,
-
         "source": None,
     }
 
@@ -1116,17 +1041,11 @@ def close_source():
 # FRAME
 # ============================================================
 
-@app.get(
-    "/api/frame"
-)
+@app.get("/api/frame")
 def get_frame():
-
-    if not (
-        model_service.loaded
-    ):
+    if not model_service.loaded:
         raise HTTPException(
             status_code=503,
-
             detail=(
                 "Modelo no cargado."
             ),
@@ -1134,8 +1053,7 @@ def get_frame():
 
     try:
         frame = (
-            stream_service
-            .read()
+            stream_service.read()
         )
 
     except Exception as exc:
@@ -1145,35 +1063,25 @@ def get_frame():
         )
 
     result = (
-        model_service
-        .model
-        .predict(
+        model_service.model.predict(
             source=frame,
-
             conf=0.35,
-
-            imgsz=768,
-
+            imgsz=640,
             device=(
-                model_service
-                .device
+                model_service.device
             ),
-
             verbose=False,
         )[0]
     )
 
-    annotated = (
-        result.plot()
-    )
+    annotated = result.plot()
 
     height, width = (
         annotated.shape[:2]
     )
 
     roi, line = (
-        traffic_config_service
-        .geometry(
+        traffic_config_service.geometry(
             width,
             height,
         )
@@ -1181,53 +1089,36 @@ def get_frame():
 
     cv2.polylines(
         annotated,
-
         [
             roi.reshape(
                 (-1, 1, 2)
             )
         ],
-
         True,
-
         (0, 255, 255),
-
         3,
     )
 
     cv2.line(
         annotated,
-
-        tuple(
-            line[0]
-        ),
-
-        tuple(
-            line[1]
-        ),
-
+        tuple(line[0]),
+        tuple(line[1]),
         (255, 0, 255),
-
         4,
     )
 
-    ok, buffer = (
-        cv2.imencode(
-            ".jpg",
-
-            annotated,
-
-            [
-                cv2.IMWRITE_JPEG_QUALITY,
-                90,
-            ],
-        )
+    ok, buffer = cv2.imencode(
+        ".jpg",
+        annotated,
+        [
+            cv2.IMWRITE_JPEG_QUALITY,
+            80,
+        ],
     )
 
     if not ok:
         raise HTTPException(
             status_code=500,
-
             detail=(
                 "No se pudo codificar "
                 "el frame."
@@ -1238,28 +1129,19 @@ def get_frame():
         content=(
             buffer.tobytes()
         ),
-
-        media_type=(
-            "image/jpeg"
-        ),
+        media_type="image/jpeg",
     )
 
 
 # ============================================================
-# VIDEO
+# MJPEG FALLBACK
 # ============================================================
 
-@app.get(
-    "/api/video"
-)
+@app.get("/api/video")
 def video():
-
-    if not (
-        model_service.loaded
-    ):
+    if not model_service.loaded:
         raise HTTPException(
             status_code=503,
-
             detail=(
                 "Modelo no cargado."
             ),
@@ -1273,7 +1155,6 @@ def video():
     ):
         raise HTTPException(
             status_code=400,
-
             detail=(
                 "Primero configura "
                 "una fuente."
@@ -1297,7 +1178,6 @@ def video():
     "/api/video/stop"
 )
 def stop_video():
-
     video_service.stop()
 
     return {
@@ -1312,7 +1192,6 @@ def stop_video():
     "/api/video/status"
 )
 def video_status():
-
     return (
         video_service
         .get_status()

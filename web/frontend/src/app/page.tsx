@@ -2,7 +2,7 @@
 
 import {
   useEffect,
-  useMemo,
+  useRef,
   useState,
 } from "react";
 
@@ -30,35 +30,20 @@ type SessionData = {
 };
 
 
+type MetricWindow = {
+  available: boolean;
+  vehicles: number | null;
+  veh_h: number | null;
+};
+
+
 type TrafficMetrics = {
   available: boolean;
-  duration_seconds?: number;
-  duration_hours?: number;
-  total_events?: number;
 
-  q1?: {
-    available: boolean;
-    vehicles: number | null;
-    veh_h: number | null;
-  };
-
-  q5?: {
-    available: boolean;
-    vehicles: number | null;
-    veh_h: number | null;
-  };
-
-  q15?: {
-    available: boolean;
-    vehicles: number | null;
-    veh_h: number | null;
-  };
-
-  th?: {
-    available: boolean;
-    vehicles: number | null;
-    veh_h: number | null;
-  };
+  q1?: MetricWindow;
+  q5?: MetricWindow;
+  q15?: MetricWindow;
+  th?: MetricWindow;
 
   max_th?: {
     available: boolean;
@@ -104,7 +89,6 @@ type SourceInfo = {
   width?: number | null;
   height?: number | null;
   format_id?: string | null;
-  protocol?: string | null;
 };
 
 
@@ -114,11 +98,6 @@ type ModelInfo = {
   device: string | null;
   cuda_available: boolean;
   gpu: string | null;
-
-  classes: Record<
-    string,
-    string
-  >;
 };
 
 
@@ -126,6 +105,7 @@ type VideoStatus = {
   running: boolean;
   frames: number;
   fps: number;
+  target_fps?: number;
 };
 
 
@@ -155,11 +135,8 @@ type DashboardData = {
   };
 
   traffic: TrafficStatus;
-
   source: SourceInfo;
-
   video: VideoStatus;
-
   model: ModelInfo;
 
   engineering: {
@@ -178,6 +155,17 @@ type SessionsResponse = {
 
 
 export default function Home() {
+  const videoRef =
+    useRef<HTMLVideoElement | null>(
+      null
+    );
+
+  const peerRef =
+    useRef<RTCPeerConnection | null>(
+      null
+    );
+
+
   const [
     mounted,
     setMounted,
@@ -233,6 +221,13 @@ export default function Home() {
     useState("");
 
 
+  const [
+    webrtcState,
+    setWebrtcState,
+  ] =
+    useState("desconectado");
+
+
   // =========================================================
   // MOUNT
   // =========================================================
@@ -240,6 +235,10 @@ export default function Home() {
   useEffect(() => {
     setMounted(true);
     setNow(Date.now());
+
+    return () => {
+      closeWebRTC();
+    };
   }, []);
 
 
@@ -254,11 +253,9 @@ export default function Home() {
 
     const timer =
       window.setInterval(
-        () => {
-          setNow(
-            Date.now()
-          );
-        },
+        () => setNow(
+          Date.now()
+        ),
         1000
       );
 
@@ -294,23 +291,14 @@ export default function Home() {
         data
       );
 
-      if (
-        data.source?.source
-        && !source
-      ) {
-        setSource(
-          data.source.source
-        );
-      }
-
     } catch {
-      // Backend puede estar reiniciando.
+      //
     }
   }
 
 
   // =========================================================
-  // HISTORIAL
+  // SESIONES
   // =========================================================
 
   async function refreshSessions() {
@@ -378,6 +366,243 @@ export default function Home() {
 
 
   // =========================================================
+  // ESPERAR ICE LOCAL
+  // =========================================================
+
+  function waitForIceGathering(
+    pc: RTCPeerConnection
+  ) {
+    return new Promise<void>(
+      (resolve) => {
+        if (
+          pc.iceGatheringState
+          === "complete"
+        ) {
+          resolve();
+          return;
+        }
+
+        const handler = () => {
+          if (
+            pc.iceGatheringState
+            === "complete"
+          ) {
+            pc.removeEventListener(
+              "icegatheringstatechange",
+              handler
+            );
+
+            resolve();
+          }
+        };
+
+        pc.addEventListener(
+          "icegatheringstatechange",
+          handler
+        );
+
+        window.setTimeout(
+          () => {
+            pc.removeEventListener(
+              "icegatheringstatechange",
+              handler
+            );
+
+            resolve();
+          },
+          5000
+        );
+      }
+    );
+  }
+
+
+  // =========================================================
+  // CERRAR WEBRTC
+  // =========================================================
+
+  function closeWebRTC() {
+    if (peerRef.current) {
+      peerRef.current.close();
+      peerRef.current = null;
+    }
+
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+
+    setWebrtcState(
+      "desconectado"
+    );
+  }
+
+
+  // =========================================================
+  // INICIAR WEBRTC
+  // =========================================================
+
+  async function startWebRTC() {
+    closeWebRTC();
+
+    setWebrtcState(
+      "conectando"
+    );
+
+    const pc =
+      new RTCPeerConnection({
+        iceServers: [
+          {
+            urls:
+              "stun:stun.l.google.com:19302",
+          },
+        ],
+      });
+
+    peerRef.current = pc;
+
+
+    pc.addTransceiver(
+      "video",
+      {
+        direction: "recvonly",
+      }
+    );
+
+
+    pc.ontrack = (
+      event
+    ) => {
+      if (
+        event.track.kind
+        !== "video"
+      ) {
+        return;
+      }
+
+      if (videoRef.current) {
+        const stream =
+          event.streams[0]
+          ?? new MediaStream(
+            [
+              event.track,
+            ]
+          );
+
+        videoRef.current.srcObject =
+          stream;
+
+        videoRef.current
+          .play()
+          .catch(
+            () => undefined
+          );
+      }
+    };
+
+
+    pc.onconnectionstatechange =
+      () => {
+        setWebrtcState(
+          pc.connectionState
+        );
+
+        if (
+          pc.connectionState
+          === "failed"
+        ) {
+          setMessage(
+            "WebRTC no pudo establecer "
+            + "conexión directa. "
+            + "Será necesario usar TURN."
+          );
+        }
+      };
+
+
+    pc.oniceconnectionstatechange =
+      () => {
+        console.log(
+          "ICE:",
+          pc.iceConnectionState
+        );
+      };
+
+
+    const offer =
+      await pc.createOffer();
+
+
+    await pc.setLocalDescription(
+      offer
+    );
+
+
+    await waitForIceGathering(
+      pc
+    );
+
+
+    if (!pc.localDescription) {
+      throw new Error(
+        "No se pudo generar "
+        + "la oferta WebRTC."
+      );
+    }
+
+
+    const response =
+      await fetch(
+        `${API}/api/webrtc/offer`,
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+
+          body:
+            JSON.stringify({
+              sdp:
+                pc.localDescription
+                  .sdp,
+
+              type:
+                pc.localDescription
+                  .type,
+            }),
+        }
+      );
+
+
+    const answer =
+      await response.json();
+
+
+    if (!response.ok) {
+      throw new Error(
+        answer.detail
+        ?? (
+          "No se pudo iniciar "
+          + "WebRTC."
+        )
+      );
+    }
+
+
+    await pc.setRemoteDescription(
+      {
+        type:
+          answer.type,
+
+        sdp:
+          answer.sdp,
+      }
+    );
+  }
+
+
+  // =========================================================
   // CONFIGURAR FUENTE
   // =========================================================
 
@@ -392,6 +617,8 @@ export default function Home() {
 
     setLoading(true);
     setMessage("");
+
+    closeWebRTC();
 
     try {
       const response =
@@ -413,27 +640,47 @@ export default function Home() {
           }
         );
 
+
       const data =
         await response.json();
 
+
       if (!response.ok) {
         throw new Error(
-          data.detail ??
-          "No se pudo configurar la fuente."
+          data.detail
+          ?? (
+            "No se pudo configurar "
+            + "la fuente."
+          )
         );
       }
 
+
       setMessage(
-        "Fuente configurada correctamente."
+        "Fuente configurada. "
+        + "Estableciendo WebRTC..."
       );
 
+
       await refreshDashboard();
+
+
+      await startWebRTC();
+
+
+      setMessage(
+        "Fuente configurada "
+        + "correctamente."
+      );
 
     } catch (error) {
       setMessage(
         error instanceof Error
           ? error.message
-          : "Error configurando la fuente."
+          : (
+            "Error configurando "
+            + "la fuente."
+          )
       );
 
     } finally {
@@ -443,7 +690,7 @@ export default function Home() {
 
 
   // =========================================================
-  // INICIAR SESIÓN
+  // SESIONES
   // =========================================================
 
   async function startSession() {
@@ -459,21 +706,28 @@ export default function Home() {
           }
         );
 
+
       const data =
         await response.json();
 
+
       if (!response.ok) {
         throw new Error(
-          data.detail ??
-          "No se pudo iniciar el aforo."
+          data.detail
+          ?? (
+            "No se pudo iniciar "
+            + "el aforo."
+          )
         );
       }
+
 
       setMessage(
         `Aforo iniciado: ${
           data.session.session_id
         }`
       );
+
 
       await refreshDashboard();
       await refreshSessions();
@@ -482,7 +736,10 @@ export default function Home() {
       setMessage(
         error instanceof Error
           ? error.message
-          : "Error iniciando el aforo."
+          : (
+            "Error iniciando "
+            + "el aforo."
+          )
       );
 
     } finally {
@@ -490,10 +747,6 @@ export default function Home() {
     }
   }
 
-
-  // =========================================================
-  // DETENER SESIÓN
-  // =========================================================
 
   async function stopSession() {
     setLoading(true);
@@ -508,21 +761,28 @@ export default function Home() {
           }
         );
 
+
       const data =
         await response.json();
 
+
       if (!response.ok) {
         throw new Error(
-          data.detail ??
-          "No se pudo detener el aforo."
+          data.detail
+          ?? (
+            "No se pudo detener "
+            + "el aforo."
+          )
         );
       }
+
 
       setMessage(
         `Sesión finalizada: ${
           data.session.session_id
         }`
       );
+
 
       await refreshDashboard();
       await refreshSessions();
@@ -531,7 +791,10 @@ export default function Home() {
       setMessage(
         error instanceof Error
           ? error.message
-          : "Error deteniendo el aforo."
+          : (
+            "Error deteniendo "
+            + "el aforo."
+          )
       );
 
     } finally {
@@ -541,7 +804,7 @@ export default function Home() {
 
 
   // =========================================================
-  // ESTADOS DERIVADOS
+  // DATOS
   // =========================================================
 
   const traffic =
@@ -582,49 +845,34 @@ export default function Home() {
     sourceInfo?.opened === true;
 
 
-  const videoUrl =
-    useMemo(
-      () => {
-        if (
-          !mounted
-          || !sourceOpened
-        ) {
-          return null;
-        }
-
-        return (
-          `${API}/api/video`
-        );
-      },
-      [
-        mounted,
-        sourceOpened,
-      ]
-    );
-
-
   const elapsed =
     currentSession
     && active
     && now > 0
+
       ? formatDuration(
           Math.max(
             0,
             (
               now
               - new Date(
-                currentSession
-                  .started_at
-              ).getTime()
-            ) / 1000
+                  currentSession
+                    .started_at
+                )
+                .getTime()
+            )
+            / 1000
           )
         )
+
       : currentSession
         ?.duration_seconds
+
         ? formatDuration(
             currentSession
               .duration_seconds
           )
+
         : "--:--:--";
 
 
@@ -648,7 +896,7 @@ export default function Home() {
 
 
   // =========================================================
-  // UI
+  // RENDER
   // =========================================================
 
   return (
@@ -668,10 +916,6 @@ export default function Home() {
           lg:px-8
         "
       >
-
-        {/* ================================================= */}
-        {/* HEADER */}
-        {/* ================================================= */}
 
         <header
           className="
@@ -720,7 +964,23 @@ export default function Home() {
               >
                 YOLO11 V2 + ByteTrack
               </span>
+
+              <span
+                className="
+                  rounded-full
+                  border
+                  border-violet-500/20
+                  bg-violet-500/10
+                  px-3
+                  py-1
+                  text-[11px]
+                  text-violet-300
+                "
+              >
+                WebRTC: {webrtcState}
+              </span>
             </div>
+
 
             <h1
               className="
@@ -733,6 +993,7 @@ export default function Home() {
               {station?.station_id
                 ?? "Estación de aforo"}
             </h1>
+
 
             <p
               className="
@@ -829,10 +1090,6 @@ export default function Home() {
         </header>
 
 
-        {/* ================================================= */}
-        {/* BARRA DE CONTROL */}
-        {/* ================================================= */}
-
         <section
           className="
             mb-6
@@ -855,22 +1112,13 @@ export default function Home() {
               value={source}
 
               onChange={
-                (
-                  event
-                ) =>
+                (event) =>
                   setSource(
                     event.target.value
                   )
               }
 
-              placeholder={
-                "URL YouTube, HLS, "
-                + "archivo local o cámara IP"
-              }
-
-              disabled={
-                active
-              }
+              disabled={active}
 
               className="
                 min-w-0
@@ -883,7 +1131,6 @@ export default function Home() {
                 py-3
                 text-sm
                 outline-none
-                transition
                 focus:border-sky-500
                 disabled:opacity-60
               "
@@ -907,7 +1154,6 @@ export default function Home() {
                 py-3
                 text-sm
                 font-semibold
-                transition
                 hover:bg-sky-500
                 disabled:
                   cursor-not-allowed
@@ -949,15 +1195,14 @@ export default function Home() {
               "
             >
               <InfoInline
-                label="Estado"
-                value="Fuente abierta"
+                label="Fuente"
+                value="abierta"
               />
 
               <InfoInline
                 label="Resolver"
                 value={
-                  sourceInfo
-                    ?.resolver
+                  sourceInfo?.resolver
                   ?? "direct"
                 }
               />
@@ -969,7 +1214,7 @@ export default function Home() {
                   && sourceInfo?.height
                     ? (
                       `${sourceInfo.width}`
-                      + `×`
+                      + "×"
                       + `${sourceInfo.height}`
                     )
                     : "--"
@@ -986,24 +1231,14 @@ export default function Home() {
                 }
               />
 
-              {sourceInfo
-                ?.format_id && (
-                <InfoInline
-                  label="Formato"
-                  value={
-                    sourceInfo
-                      .format_id
-                  }
-                />
-              )}
+              <InfoInline
+                label="Transporte"
+                value="WebRTC"
+              />
             </div>
           )}
         </section>
 
-
-        {/* ================================================= */}
-        {/* OPERACIÓN */}
-        {/* ================================================= */}
 
         <div
           className="
@@ -1022,35 +1257,63 @@ export default function Home() {
               bg-black
             "
           >
-            {videoUrl ? (
-              <img
-                src={videoUrl}
-                alt="Video de aforo vehicular"
+            <div
+              className="
+                relative
+                aspect-video
+                bg-black
+              "
+            >
+              <video
+                ref={videoRef}
+                autoPlay
+                muted
+                playsInline
 
                 className="
-                  block
-                  aspect-video
+                  h-full
                   w-full
                   object-contain
                 "
               />
-            ) : (
-              <div
-                className="
-                  flex
-                  aspect-video
-                  items-center
-                  justify-center
-                  p-8
-                  text-center
-                  text-sm
-                  text-slate-500
-                "
-              >
-                Configura una fuente
-                para iniciar el monitoreo.
-              </div>
-            )}
+
+              {!sourceOpened && (
+                <div
+                  className="
+                    absolute
+                    inset-0
+                    flex
+                    items-center
+                    justify-center
+                    text-sm
+                    text-slate-500
+                  "
+                >
+                  Configura una fuente
+                  para iniciar el monitoreo.
+                </div>
+              )}
+
+              {sourceOpened
+              && webrtcState
+              !== "connected" && (
+                <div
+                  className="
+                    absolute
+                    bottom-4
+                    left-4
+                    rounded-lg
+                    bg-black/70
+                    px-3
+                    py-2
+                    text-xs
+                    text-slate-300
+                  "
+                >
+                  WebRTC: {webrtcState}
+                </div>
+              )}
+            </div>
 
 
             <div
@@ -1103,12 +1366,10 @@ export default function Home() {
           >
             <MetricCard
               label="Vehículos"
-
               value={
                 traffic?.total
                 ?? 0
               }
-
               large
             />
 
@@ -1122,7 +1383,6 @@ export default function Home() {
             >
               <MetricCard
                 label="Sentido A"
-
                 value={
                   traffic
                     ?.direcciones
@@ -1133,7 +1393,6 @@ export default function Home() {
 
               <MetricCard
                 label="Sentido B"
-
                 value={
                   traffic
                     ?.direcciones
@@ -1168,9 +1427,7 @@ export default function Home() {
 
 
               <div
-                className="
-                  space-y-3
-                "
+                className="space-y-3"
               >
                 <DataRow
                   label="Inicio"
@@ -1243,7 +1500,6 @@ export default function Home() {
                     py-3
                     text-sm
                     font-semibold
-                    transition
                     hover:bg-emerald-500
                     disabled:
                       cursor-not-allowed
@@ -1272,7 +1528,6 @@ export default function Home() {
                     py-3
                     text-sm
                     font-semibold
-                    transition
                     hover:bg-red-600
                     disabled:
                       cursor-not-allowed
@@ -1287,10 +1542,6 @@ export default function Home() {
           </aside>
         </div>
 
-
-        {/* ================================================= */}
-        {/* INGENIERÍA DE TRÁFICO */}
-        {/* ================================================= */}
 
         <section
           className="
@@ -1310,7 +1561,6 @@ export default function Home() {
               justify-between
               gap-2
               sm:flex-row
-              sm:items-center
             "
           >
             <div>
@@ -1372,30 +1622,22 @@ export default function Home() {
           >
             <EngineeringCard
               label="q1"
-              metric={
-                metrics?.q1
-              }
+              metric={metrics?.q1}
             />
 
             <EngineeringCard
               label="q5"
-              metric={
-                metrics?.q5
-              }
+              metric={metrics?.q5}
             />
 
             <EngineeringCard
               label="q15"
-              metric={
-                metrics?.q15
-              }
+              metric={metrics?.q15}
             />
 
             <EngineeringCard
               label="TH"
-              metric={
-                metrics?.th
-              }
+              metric={metrics?.th}
             />
 
             <MetricCard
@@ -1451,10 +1693,6 @@ export default function Home() {
         </section>
 
 
-        {/* ================================================= */}
-        {/* INFORMACIÓN OPERATIVA */}
-        {/* ================================================= */}
-
         <div
           className="
             mt-6
@@ -1469,8 +1707,7 @@ export default function Home() {
             <DataRow
               label="Estación"
               value={
-                station
-                  ?.station_id
+                station?.station_id
                 ?? "--"
               }
             />
@@ -1478,8 +1715,7 @@ export default function Home() {
             <DataRow
               label="Vía"
               value={
-                station
-                  ?.road
+                station?.road
                 ?? "--"
               }
             />
@@ -1487,8 +1723,7 @@ export default function Home() {
             <DataRow
               label="Referencia"
               value={
-                station
-                  ?.reference
+                station?.reference
                 ?? "--"
               }
             />
@@ -1496,8 +1731,7 @@ export default function Home() {
             <DataRow
               label="Ciudad"
               value={
-                station
-                  ?.city
+                station?.city
                 ?? "--"
               }
             />
@@ -1537,12 +1771,15 @@ export default function Home() {
               label="FPS"
               value={
                 video
-                  ? (
-                    `${video.fps
-                      .toFixed(1)}`
-                  )
+                  ? video.fps
+                    .toFixed(1)
                   : "--"
               }
+            />
+
+            <DataRow
+              label="Transporte"
+              value="WebRTC"
             />
           </DetailPanel>
 
@@ -1568,7 +1805,6 @@ export default function Home() {
 
                   <DataRow
                     label="Clase"
-
                     value={
                       dashboard
                         .last_event
@@ -1578,7 +1814,6 @@ export default function Home() {
 
                   <DataRow
                     label="Dirección"
-
                     value={
                       dashboard
                         .last_event
@@ -1628,10 +1863,6 @@ export default function Home() {
         </div>
 
 
-        {/* ================================================= */}
-        {/* COMPOSICIÓN */}
-        {/* ================================================= */}
-
         <section
           className="
             mt-6
@@ -1673,9 +1904,7 @@ export default function Home() {
               "furgoneta",
               "triciclo",
             ].map(
-              (
-                name
-              ) => (
+              (name) => (
                 <div
                   key={name}
 
@@ -1719,10 +1948,6 @@ export default function Home() {
           </div>
         </section>
 
-
-        {/* ================================================= */}
-        {/* HISTORIAL */}
-        {/* ================================================= */}
 
         <section
           className="
@@ -1826,186 +2051,168 @@ export default function Home() {
                   divide-slate-800
                 "
               >
-                {sessions.length
-                  === 0 ? (
-                    <tr>
-                      <td
-                        colSpan={7}
+                {sessions.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={7}
+
+                      className="
+                        px-5
+                        py-8
+                        text-center
+                        text-slate-500
+                      "
+                    >
+                      No existen sesiones
+                      registradas.
+                    </td>
+                  </tr>
+                ) : (
+                  sessions.map(
+                    (session) => (
+                      <tr
+                        key={
+                          session.session_id
+                        }
 
                         className="
-                          px-5
-                          py-8
-                          text-center
-                          text-slate-500
+                          hover:bg-slate-800/30
                         "
                       >
-                        No existen sesiones
-                        registradas.
-                      </td>
-                    </tr>
-                  ) : (
-                    sessions.map(
-                      (
-                        session
-                      ) => (
-                        <tr
-                          key={
-                            session
-                              .session_id
-                          }
-
+                        <td
                           className="
-                            transition
-                            hover:bg-slate-800/30
+                            px-5
+                            py-4
+                            font-mono
+                            text-xs
+                            text-sky-300
                           "
                         >
-                          <td
-                            className="
-                              px-5
-                              py-4
-                              font-mono
-                              text-xs
-                              text-sky-300
-                            "
-                          >
-                            {
-                              session
-                                .session_id
-                            }
-                          </td>
+                          {
+                            session.session_id
+                          }
+                        </td>
 
-                          <td
-                            className="
-                              px-5
-                              py-4
-                              text-slate-300
-                            "
-                          >
-                            {
-                              formatDateTime(
-                                session
-                                  .started_at,
-                                mounted
-                              )
-                            }
-                          </td>
+                        <td
+                          className="
+                            px-5
+                            py-4
+                          "
+                        >
+                          {
+                            formatDateTime(
+                              session.started_at,
+                              mounted
+                            )
+                          }
+                        </td>
 
-                          <td
-                            className="
-                              px-5
-                              py-4
-                              text-slate-400
-                            "
-                          >
-                            {
-                              session
-                                .ended_at
-                                ? formatDateTime(
-                                    session
-                                      .ended_at,
-                                    mounted
-                                  )
-                                : "--"
-                            }
-                          </td>
-
-                          <td
-                            className="
-                              px-5
-                              py-4
-                              text-slate-300
-                            "
-                          >
-                            {
-                              session
-                                .duration_seconds
-                                ? formatDuration(
-                                    session
-                                      .duration_seconds
-                                  )
-                                : (
-                                  session
-                                    .status
-                                  === "EN_CURSO"
-                                    ? "En curso"
-                                    : "--"
+                        <td
+                          className="
+                            px-5
+                            py-4
+                            text-slate-400
+                          "
+                        >
+                          {
+                            session.ended_at
+                              ? formatDateTime(
+                                  session.ended_at,
+                                  mounted
                                 )
+                              : "--"
+                          }
+                        </td>
+
+                        <td
+                          className="
+                            px-5
+                            py-4
+                          "
+                        >
+                          {
+                            session
+                              .duration_seconds
+                              ? formatDuration(
+                                  session
+                                    .duration_seconds
+                                )
+                              : (
+                                session.status
+                                === "EN_CURSO"
+                                  ? "En curso"
+                                  : "--"
+                              )
+                          }
+                        </td>
+
+                        <td
+                          className="
+                            px-5
+                            py-4
+                            font-semibold
+                          "
+                        >
+                          {
+                            session
+                              .total_vehicles
+                          }
+                        </td>
+
+                        <td
+                          className="
+                            px-5
+                            py-4
+                          "
+                        >
+                          <SessionBadge
+                            status={
+                              session.status
                             }
-                          </td>
+                          />
+                        </td>
 
-                          <td
-                            className="
-                              px-5
-                              py-4
-                              font-semibold
-                            "
-                          >
-                            {
-                              session
-                                .total_vehicles
+                        <td
+                          className="
+                            px-5
+                            py-4
+                          "
+                        >
+                          <a
+                            href={
+                              `${API}`
+                              + `/api/sessions/`
+                              + `${session.session_id}`
+                              + `/export.csv`
                             }
-                          </td>
 
-                          <td
                             className="
-                              px-5
-                              py-4
+                              rounded-lg
+                              border
+                              border-slate-700
+                              bg-slate-950
+                              px-3
+                              py-2
+                              text-xs
+                              text-slate-300
+                              hover:
+                                border-sky-500
+                              hover:
+                                text-sky-300
                             "
                           >
-                            <SessionBadge
-                              status={
-                                session
-                                  .status
-                              }
-                            />
-                          </td>
-
-                          <td
-                            className="
-                              px-5
-                              py-4
-                            "
-                          >
-                            <a
-                              href={
-                                `${API}`
-                                + `/api/sessions/`
-                                + `${session.session_id}`
-                                + `/export.csv`
-                              }
-
-                              className="
-                                rounded-lg
-                                border
-                                border-slate-700
-                                bg-slate-950
-                                px-3
-                                py-2
-                                text-xs
-                                font-medium
-                                text-slate-300
-                                transition
-                                hover:border-sky-500
-                                hover:text-sky-300
-                              "
-                            >
-                              CSV
-                            </a>
-                          </td>
-                        </tr>
-                      )
+                            CSV
+                          </a>
+                        </td>
+                      </tr>
                     )
                   )
-                }
+                )}
               </tbody>
             </table>
           </div>
         </section>
 
-
-        {/* ================================================= */}
-        {/* FOOTER ACADÉMICO */}
-        {/* ================================================= */}
 
         <footer
           className="
@@ -2028,7 +2235,6 @@ export default function Home() {
               className="
                 text-base
                 font-bold
-                text-slate-100
               "
             >
               Sistema de Detección
@@ -2101,7 +2307,6 @@ export default function Home() {
                 mt-3
                 flex
                 flex-col
-                items-center
                 justify-center
                 gap-1
                 text-sm
@@ -2144,10 +2349,8 @@ export default function Home() {
                 mt-6
                 flex
                 flex-wrap
-                items-center
                 justify-center
-                gap-x-3
-                gap-y-2
+                gap-3
                 text-xs
               "
             >
@@ -2159,8 +2362,6 @@ export default function Home() {
                 className="
                   font-semibold
                   text-sky-400
-                  transition
-                  hover:text-sky-300
                 "
               >
                 GitHub
@@ -2182,8 +2383,6 @@ export default function Home() {
                 className="
                   font-semibold
                   text-sky-400
-                  transition
-                  hover:text-sky-300
                 "
               >
                 API Docs
@@ -2202,23 +2401,7 @@ export default function Home() {
                   text-slate-500
                 "
               >
-                YOLO11 V2
-              </span>
-
-              <span
-                className="
-                  text-slate-700
-                "
-              >
-                ·
-              </span>
-
-              <span
-                className="
-                  text-slate-500
-                "
-              >
-                ByteTrack
+                WebRTC
               </span>
 
               <span
@@ -2260,7 +2443,6 @@ export default function Home() {
             className="
               flex
               flex-col
-              items-center
               justify-between
               gap-2
               border-t
@@ -2279,7 +2461,7 @@ export default function Home() {
             </span>
 
             <span>
-              Versión 1.0.0
+              Versión 1.1.0
             </span>
           </div>
         </footer>
@@ -2328,7 +2510,6 @@ function MetricCard({
         className={`
           mt-2
           font-bold
-          tracking-tight
 
           ${
             large
@@ -2349,12 +2530,7 @@ function EngineeringCard({
   metric,
 }: {
   label: string;
-
-  metric?: {
-    available: boolean;
-    vehicles: number | null;
-    veh_h: number | null;
-  };
+  metric?: MetricWindow;
 }) {
   return (
     <MetricCard
@@ -2363,10 +2539,12 @@ function EngineeringCard({
       value={
         metric?.available
         && metric.veh_h !== null
+
           ? (
             `${metric.veh_h
               .toFixed(0)} veh/h`
           )
+
           : "Pendiente"
       }
     />
@@ -2404,11 +2582,7 @@ function DetailPanel({
         {title}
       </h2>
 
-      <div
-        className="
-          space-y-3
-        "
-      >
+      <div className="space-y-3">
         {children}
       </div>
     </section>
@@ -2453,13 +2627,19 @@ function DataRow({
 
           ${
             strong
-              ? "font-bold text-sky-300"
+              ? (
+                "font-bold "
+                + "text-sky-300"
+              )
               : ""
           }
 
           ${
             mono
-              ? "font-mono text-xs"
+              ? (
+                "font-mono "
+                + "text-xs"
+              )
               : ""
           }
         `}
@@ -2570,11 +2750,14 @@ function SessionBadge({
               "bg-emerald-500/10 "
               + "text-emerald-300"
             )
+
             : interrupted
+
               ? (
                 "bg-amber-500/10 "
                 + "text-amber-300"
               )
+
               : (
                 "bg-sky-500/10 "
                 + "text-sky-300"
@@ -2622,9 +2805,7 @@ function formatDuration(
     secs,
   ]
     .map(
-      (
-        value
-      ) =>
+      (value) =>
         String(value)
           .padStart(
             2,

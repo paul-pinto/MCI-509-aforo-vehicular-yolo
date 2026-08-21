@@ -21,6 +21,25 @@ class StreamService:
         self.metadata = {}
 
     # ========================================================
+    # DETECTAR ARCHIVO LOCAL
+    # ========================================================
+
+    @staticmethod
+    def _is_local_file(
+        source: str,
+    ):
+        if "://" in source:
+            return False
+
+        try:
+            return Path(
+                source
+            ).exists()
+
+        except Exception:
+            return False
+
+    # ========================================================
     # ABRIR
     # ========================================================
 
@@ -49,16 +68,14 @@ class StreamService:
             else {}
         )
 
-        source_path = Path(
-            source
-        )
-
         self.is_file = (
-            source_path.exists()
+            self._is_local_file(
+                source
+            )
         )
 
         # ====================================================
-        # INTENTO CON FFMPEG
+        # FFMPEG
         # ====================================================
 
         self.cap = cv2.VideoCapture(
@@ -66,19 +83,56 @@ class StreamService:
             cv2.CAP_FFMPEG,
         )
 
+        if (
+            self.cap is not None
+        ):
+            # OpenCV/FFmpeg no siempre respeta
+            # CAP_PROP_BUFFERSIZE, pero cuando
+            # lo hace ayuda mucho con streams
+            # en vivo porque evita acumular
+            # frames antiguos.
+            try:
+                self.cap.set(
+                    cv2.CAP_PROP_BUFFERSIZE,
+                    1,
+                )
+
+            except Exception:
+                pass
+
         # ====================================================
-        # FALLBACK AUTOMÁTICO
+        # FALLBACK
         # ====================================================
 
-        if not self.cap.isOpened():
+        if (
+            self.cap is None
+            or not self.cap.isOpened()
+        ):
             if self.cap is not None:
                 self.cap.release()
 
-            self.cap = cv2.VideoCapture(
-                source
+            self.cap = (
+                cv2.VideoCapture(
+                    source
+                )
             )
 
-        if not self.cap.isOpened():
+            if (
+                self.cap is not None
+            ):
+                try:
+                    self.cap.set(
+                        cv2.CAP_PROP_BUFFERSIZE,
+                        1,
+                    )
+
+                except Exception:
+                    pass
+
+        if (
+            self.cap is None
+            or not self.cap.isOpened()
+        ):
             self.cap = None
 
             raise RuntimeError(
@@ -87,7 +141,7 @@ class StreamService:
             )
 
         # ====================================================
-        # INFORMACIÓN DE LA FUENTE
+        # INFORMACIÓN DE FUENTE
         # ====================================================
 
         fps = self.cap.get(
@@ -124,7 +178,7 @@ class StreamService:
         )
 
         # ====================================================
-        # PROBAR LECTURA REAL
+        # PRUEBA DE LECTURA
         # ====================================================
 
         ok, frame = (
@@ -145,8 +199,6 @@ class StreamService:
                 "decodificar ningún frame."
             )
 
-        # Usamos las dimensiones reales
-        # del primer frame.
         self.height = int(
             frame.shape[0]
         )
@@ -155,8 +207,8 @@ class StreamService:
             frame.shape[1]
         )
 
-        # Para archivos locales,
-        # volver al comienzo.
+        # En archivos locales volvemos
+        # al inicio.
         if self.is_file:
             self.cap.set(
                 cv2.CAP_PROP_POS_FRAMES,
@@ -164,7 +216,7 @@ class StreamService:
             )
 
     # ========================================================
-    # LEER
+    # LEER FRAME
     # ========================================================
 
     def read(self):
@@ -179,7 +231,7 @@ class StreamService:
         )
 
         # ====================================================
-        # LOOP PARA ARCHIVOS LOCALES
+        # LOOP PARA ARCHIVOS
         # ====================================================
 
         if (
@@ -210,12 +262,32 @@ class StreamService:
         return frame
 
     # ========================================================
+    # DESCARTAR FRAME
+    # ========================================================
+
+    def grab(self):
+        if self.cap is None:
+            return False
+
+        try:
+            return bool(
+                self.cap.grab()
+            )
+
+        except Exception:
+            return False
+
+    # ========================================================
     # CERRAR
     # ========================================================
 
     def close(self):
         if self.cap is not None:
-            self.cap.release()
+            try:
+                self.cap.release()
+
+            except Exception:
+                pass
 
         self.cap = None
 
@@ -233,7 +305,7 @@ class StreamService:
         self.metadata = {}
 
     # ========================================================
-    # INFO
+    # ESTADO
     # ========================================================
 
     def get_info(self):
