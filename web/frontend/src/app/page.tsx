@@ -896,6 +896,61 @@ export default function Home() {
 
 
   // =========================================================
+  // CLASES DE BOTONES
+  // =========================================================
+
+  const configureButtonClass =
+    configureDisabled
+      ? (
+        "cursor-not-allowed "
+        + "border border-slate-700 "
+        + "bg-slate-800 "
+        + "text-slate-500"
+      )
+      : (
+        "bg-sky-600 "
+        + "text-white "
+        + "shadow-lg shadow-sky-950/30 "
+        + "hover:bg-sky-500 "
+        + "active:bg-sky-700"
+      );
+
+
+  const startButtonClass =
+    startDisabled
+      ? (
+        "cursor-not-allowed "
+        + "border border-slate-700 "
+        + "bg-slate-800 "
+        + "text-slate-500"
+      )
+      : (
+        "bg-emerald-500 "
+        + "text-white "
+        + "shadow-lg shadow-emerald-950/30 "
+        + "hover:bg-emerald-400 "
+        + "active:bg-emerald-600"
+      );
+
+
+  const stopButtonClass =
+    stopDisabled
+      ? (
+        "cursor-not-allowed "
+        + "border border-slate-700 "
+        + "bg-slate-800 "
+        + "text-slate-500"
+      )
+      : (
+        "bg-rose-600 "
+        + "text-white "
+        + "shadow-lg shadow-rose-950/30 "
+        + "hover:bg-rose-500 "
+        + "active:bg-rose-700"
+      );
+
+
+  // =========================================================
   // RENDER
   // =========================================================
 
@@ -1132,7 +1187,12 @@ export default function Home() {
                 text-sm
                 outline-none
                 focus:border-sky-500
-                disabled:opacity-60
+                disabled:
+                  cursor-not-allowed
+                disabled:
+                  bg-slate-900
+                disabled:
+                  text-slate-500
               "
             />
 
@@ -1147,19 +1207,17 @@ export default function Home() {
                 configureSource
               }
 
-              className="
+              className={`
                 rounded-xl
-                bg-sky-600
                 px-6
                 py-3
                 text-sm
                 font-semibold
-                hover:bg-sky-500
-                disabled:
-                  cursor-not-allowed
-                disabled:
-                  opacity-40
-              "
+                transition
+                duration-150
+
+                ${configureButtonClass}
+              `}
             >
               {loading
                 ? "Procesando..."
@@ -1493,19 +1551,17 @@ export default function Home() {
                     startDisabled
                   }
 
-                  className="
+                  className={`
                     rounded-xl
-                    bg-emerald-600
                     px-4
                     py-3
                     text-sm
                     font-semibold
-                    hover:bg-emerald-500
-                    disabled:
-                      cursor-not-allowed
-                    disabled:
-                      opacity-35
-                  "
+                    transition
+                    duration-150
+
+                    ${startButtonClass}
+                  `}
                 >
                   Iniciar aforo
                 </button>
@@ -1521,19 +1577,17 @@ export default function Home() {
                     stopDisabled
                   }
 
-                  className="
+                  className={`
                     rounded-xl
-                    bg-red-700
                     px-4
                     py-3
                     text-sm
                     font-semibold
-                    hover:bg-red-600
-                    disabled:
-                      cursor-not-allowed
-                    disabled:
-                      opacity-35
-                  "
+                    transition
+                    duration-150
+
+                    ${stopButtonClass}
+                  `}
                 >
                   Detener aforo
                 </button>
@@ -2195,6 +2249,7 @@ export default function Home() {
                               py-2
                               text-xs
                               text-slate-300
+                              transition
                               hover:
                                 border-sky-500
                               hover:
@@ -2362,6 +2417,8 @@ export default function Home() {
                 className="
                   font-semibold
                   text-sky-400
+                  transition
+                  hover:text-sky-300
                 "
               >
                 GitHub
@@ -2383,6 +2440,8 @@ export default function Home() {
                 className="
                   font-semibold
                   text-sky-400
+                  transition
+                  hover:text-sky-300
                 "
               >
                 API Docs
