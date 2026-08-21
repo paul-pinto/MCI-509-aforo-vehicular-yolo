@@ -92,3 +92,25 @@ sesiones_aforo.csv
 
 # Resultados temporales
 resultados/revision_roi/
+
+# Web
+web/frontend/node_modules/
+web/frontend/.next/
+web/frontend/.env.local
+
+# Backend runtime data
+web/backend/data/*.db
+web/backend/data/*.db-shm
+web/backend/data/*.db-wal
+
+# Secrets
+cookies.txt
+**/cookies.txt
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Model weights
+*.pt
