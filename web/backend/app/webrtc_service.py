@@ -28,20 +28,16 @@ class ProcessedVideoTrack(
     ):
         super().__init__()
 
-        self.video_service = (
-            video_service
-        )
+        self.video_service = video_service
 
         self.fps = max(
             1.0,
             float(fps),
         )
 
-        self.time_base = (
-            fractions.Fraction(
-                1,
-                VIDEO_CLOCK_RATE,
-            )
+        self.time_base = fractions.Fraction(
+            1,
+            VIDEO_CLOCK_RATE,
         )
 
         self.timestamp_step = int(
@@ -131,7 +127,7 @@ class WebRTCService:
         )
 
     # ========================================================
-    # CONFIGURACIÓN ICE
+    # CREAR PEER
     # ========================================================
 
     def create_peer_connection(self):
@@ -156,7 +152,7 @@ class WebRTCService:
         )
 
     # ========================================================
-    # H264 SI ESTÁ DISPONIBLE
+    # PREFERIR H264
     # ========================================================
 
     @staticmethod
@@ -213,7 +209,9 @@ class WebRTCService:
         ):
             return
 
-        event = asyncio.Event()
+        event = (
+            asyncio.Event()
+        )
 
         @pc.on(
             "icegatheringstatechange"
@@ -235,7 +233,7 @@ class WebRTCService:
             pass
 
     # ========================================================
-    # CREAR RESPUESTA
+    # CREAR ANSWER
     # ========================================================
 
     async def create_answer(
@@ -306,27 +304,33 @@ class WebRTCService:
                 pc.iceConnectionState,
             )
 
-        offer = RTCSessionDescription(
-            sdp=sdp,
-            type=type_,
+        offer = (
+            RTCSessionDescription(
+                sdp=sdp,
+                type=type_,
+            )
         )
 
         await pc.setRemoteDescription(
             offer
         )
 
-        track = ProcessedVideoTrack(
-            video_service=(
-                self.video_service
-            ),
-            fps=(
-                self.video_service
-                .target_fps
-            ),
+        track = (
+            ProcessedVideoTrack(
+                video_service=(
+                    self.video_service
+                ),
+                fps=(
+                    self.video_service
+                    .target_fps
+                ),
+            )
         )
 
-        sender = pc.addTrack(
-            track
+        sender = (
+            pc.addTrack(
+                track
+            )
         )
 
         self.prefer_h264(
@@ -414,8 +418,10 @@ class WebRTCService:
                         pc.iceConnectionState
                     ),
                 }
+
                 for peer_id, pc
-                in self.peer_connections.items()
+                in self.peer_connections
+                .items()
             }
 
         return {
